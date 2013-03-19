@@ -17,6 +17,7 @@
 import hashlib
 import binascii
 import struct
+import os
 
 #  Copyright (c) 2009 by Larry Bugbee, Kent, WA
 
@@ -319,7 +320,7 @@ class FPCurve(object):
     Gx = 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798L
     Gy = 0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8L
     # base point order
-    order  = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141L
+    r  = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141L
 
 
     def __init__(self, x = 'dflt', y = 'dflt'):
@@ -337,6 +338,7 @@ class FPCurve(object):
         
         return ( y * y - ( x * x * x + self.a * x + self.b ) ) % self.p == 0
 
+
     def __cmp__(self, other):
 
         """ Return 0 if the points are identical, 1 otherwise.
@@ -347,6 +349,7 @@ class FPCurve(object):
             return 0
         else:
             return 1
+
 
 
     def __add__(self, other):
@@ -373,6 +376,7 @@ class FPCurve(object):
         return self.__class__(x = x3, y = y3)
 
 
+
     def __mul__(self, other):
 
         """ Multiply a point by an integer.
@@ -380,7 +384,7 @@ class FPCurve(object):
         """
         
         e = other
-        e = e % self.order
+        e = e % self.r
         if e == 0:
             return INFINITY
 
@@ -411,6 +415,7 @@ class FPCurve(object):
         return result
 
 
+
     def __rmul__(self, other):
 
         """ Multiply a point by an integer.
@@ -420,11 +425,13 @@ class FPCurve(object):
         return self * other
 
 
+
     def __str__(self):
         if self == INFINITY:
             return "infinity"
         else:
             return "(%d, %d)" % ( self.x, self.y )
+
 
 
     def double(self):
@@ -571,11 +578,6 @@ class Base58(object):
 
 
 
-    def string_to_number_fixedlen(self, string, order):
-        l = self.order_len(order)
-        return int(binascii.hexlify(string), 16)
-
-
 
 
 class Address(object):
@@ -584,16 +586,142 @@ class Address(object):
 
     """
 
+    base_curve = FPCurve()
+    
     B58 = Base58()
 
     private_key = None
 
+
     def __init__(self, private_key):
         self.private_key = private_key
+
         string_key = self.B58.base58_check_decode(private_key, 128)
         int_key = self.B58.string_to_number(string_key)
-        self.public_point = FPCurve() * int_key
+        self.private_key_int = int_key
 
+        self.public_point = self.base_curve * int_key
+        self._validate_public_key(self.public_point)
+        self._validate_private_key(int_key)
+
+        ## do an extra validation by signing and then verifying a
+        ## message
+
+        data_hash = self.B58.dhash("verify")
+        signature =self.sign(data_hash,
+                             self.rand_key(256, self.base_curve.r)
+                             )
+        assert self.verify(data_hash, signature)
+
+
+    def _validate_public_key(self, public_point):
+
+        """ is the public key valid?
+
+        """
+
+        out = (public_point != INFINITY and
+               0 < public_point.x < public_point.r and
+               0 < public_point.y < public_point.r and
+               self.base_curve.contains_point(public_point.x,
+                                         public_point.y) and
+               self.base_curve.r * public_point == INFINITY
+               )
+
+        return out
+
+
+    def _validate_private_key(self, int_private_key):
+
+        """ is the public key valid?
+
+        """
+
+        return 0 < int_private_key < self.base_curve.p
+
+
+
+    def rand_key(self, bits, n):
+
+        ''' Generate a random number (mod n) having the specified bit
+            length.
+
+            from https://github.com/amintos/PyECC/blob/master/ecc/ecdsa.py
+        '''
+
+        rb = os.urandom(bits / 8 + 8)  # + 64 bits as recommended in FIPS 186-3
+        c = 0
+        for r in rb:
+            c = (c << 8) | ord(r)
+
+        return (c % (n - 1)) + 1     
+
+
+
+    def verify(self, data_hash, signature):
+
+        """ Verify that signature is a valid signature of data_hash.
+
+            Return True if the signature is valid.
+
+        """
+
+        (r, s) = signature
+
+        order = self.base_curve.r
+
+        if r < 1 or r > order - 1:
+            return False
+
+        if s < 1 or s > order - 1:
+            return False
+        
+        c = inverse_mod(s, order)
+
+        u1 = (self.B58.string_to_number(data_hash) * c) % order
+        u2 = (r * c) % order
+        xy = u1 * self.base_curve + u2 * self.public_point
+        v = xy.x % order
+
+        return v == r
+
+
+
+    def sign(self, data_hash, nonce):
+        
+        """ Return a signature for the provided hash, using the
+            provided random nonce.  It is absolutely vital that
+            nonce be an unpredictable number in the range [1,
+            self.public_key.point.order()-1].  If an attacker can
+            guess nonce, he can compute our private key from a
+            single signature.  Also, if an attacker knows a few
+            high-order bits (or a few low-order bits) of nonce, he
+            can compute our private key from many signatures.  The
+            generation of nonces with adequate cryptographic strength
+            is very difficult and far beyond the scope of this
+            comment.
+
+            May raise WalletError, in which case retrying with a new
+            nonce is in order.
+
+        """
+
+        order = self.base_curve.r
+        k = nonce % order
+        p1 = k * self.base_curve
+        r = p1.x
+        if r == 0:
+            raise WalletError("Bad random number r. Try again with different nonce")
+
+        s = (
+            inverse_mod(k, order) * 
+            (self.B58.string_to_number(data_hash) + (
+                self.private_key_int * r) % order)
+            ) % order
+        if s == 0:
+            raise WalletError("Bad random number s. Try again with different nonce")
+
+        return (r, s)
 
 
     def get_public_key(self):
@@ -748,3 +876,5 @@ def test():
     test1()
     test2()
 
+
+test()
