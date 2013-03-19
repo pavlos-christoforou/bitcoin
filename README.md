@@ -3,4 +3,4 @@ bitcoin
 
 Bitcoin Tools
 
-Wallet.py - allows generation of deterministic bitcoin addresses.
+Wallet.py - single file module that allows generation of deterministic bitcoin addresses. Minimal code and no dependencies.
