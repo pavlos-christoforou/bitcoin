@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """ Utilities to generate bitcoin addresses.
 
     - single file with zero dependencies.
@@ -18,6 +19,7 @@ import hashlib
 import binascii
 import struct
 import os
+import argparse
 
 #  Copyright (c) 2009 by Larry Bugbee, Kent, WA
 
@@ -53,7 +55,7 @@ class Salsa20(object):
 
     TAU    = ( 0x61707865, 0x3120646e, 0x79622d36, 0x6b206574 )
     SIGMA  = ( 0x61707865, 0x3320646e, 0x79622d32, 0x6b206574 )
-    ROUNDS = 12                         # 8, 12, 20
+    ROUNDS = 20                         # 8, 12, 20
 
     # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -466,14 +468,48 @@ INFINITY = FPCurve(None, None )
 
 
 ### from addrgen.py  (David Sterry - weex)
+### and from https://gist.github.com/ianoxley/865912
 
 class Base58(object):
 
     """ Base58 manipulations.
 
+    
     """
 
     B58_DIGITS = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+    alphabet = '123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ'
+    base_count = len(alphabet)
+
+    def encode(self, num):
+            """ Returns num in a base58-encoded string """
+            encode = ''
+
+            if (num < 0):
+                    return ''
+
+            while (num >= base_count):	
+                    mod = num % base_count
+                    encode = alphabet[mod] + encode
+                    num = num / base_count
+
+            if (num):
+                    encode = alphabet[num] + encode
+
+            return encode
+
+    def decode(self, s):
+            """ Decodes the base58-encoded string s into an integer """
+            decoded = 0
+            multi = 1
+            s = s[::-1]
+            for char in s:
+                    decoded += multi * alphabet.index(char)
+                    multi = multi * base_count
+
+            return decoded
+
 
 
     def dhash(self, s):
@@ -724,14 +760,15 @@ class Address(object):
         return (r, s)
 
 
+
     def get_public_key(self):
 
         """ return encoded public key.
 
         """
 
-        x = self.B58.number_to_string(self.public_point.x, 16)
-        y = self.B58.number_to_string(self.public_point.y, 16)
+        x = self.B58.number_to_string(self.public_point.x, self.base_curve.r)
+        y = self.B58.number_to_string(self.public_point.y, self.base_curve.r)
         prefix = self.B58.number_to_string(4, 1)
         key = prefix + x + y
         return self.B58.base58_check_encode(key, 128)
@@ -753,8 +790,8 @@ class Address(object):
 
         """
 
-        x = self.B58.number_to_string(self.public_point.x, 16)
-        y = self.B58.number_to_string(self.public_point.y, 16)
+        x = self.B58.number_to_string(self.public_point.x, self.base_curve.r)
+        y = self.B58.number_to_string(self.public_point.y, self.base_curve.r)
         prefix = self.B58.number_to_string(4, 1)
         key = prefix + x + y
         hash160 = self.B58.rhash(key)
@@ -791,7 +828,7 @@ class Wallet(object):
 
     B58 = Base58()
 
-    def __init__(self, phrase, count = 3):
+    def __init__(self, phrase, count = 5):
 
         self.phrase = phrase
         self.count = count
@@ -821,14 +858,127 @@ class Wallet(object):
 
     def print_online_addresses(self):
         print 'Printing Online Addresses'
-        for (i, address) in enumerate(self.offline_addresses):
+        for (i, address) in enumerate(self.online_addresses):
             print '%i, %s, %s' % (i+1, address.get_address(), address.get_private_key())
 
 
 
+    def print_report(self):
+
+        """ print a full report of all relevant info.
+
+        """
+
+        out = ['Offline Addresses',
+               '=================',
+               '',
+               ]
+
+        for (i, address) in enumerate(self.offline_addresses):
+            out.append('%i, %s, %s' % (i+1, address.get_address(), address.get_private_key()))
+
+        out.append('')
+        out.append('')
+        out.extend( ['Online Addresses',
+                     '================',
+                     '',
+                     ]
+                    )
+        for (i, address) in enumerate(self.online_addresses):
+            out.append('%i, %s, %s' % (i+1, address.get_address(), address.get_private_key()))
+
+        out.append('')
+
+
+        txt = template.format(phrase = self.phrase, addresses = '\n'.join(out))
+
+        print txt
+        return txt
 
 
 
+def cli():
+    """ command line interface.
+
+    """
+
+    parser = argparse.ArgumentParser(
+        description = 'Generate Deterministic BitCoin Addresses',
+        )
+
+    parser.add_argument('--phrase',
+                        required = True,
+                        dest = 'phrase',
+                        help = "Secret Phrase. MAKE SURE IT IS LONG AND COMPLEX AND **ENSURE** YOU NEITHER REVEAL IT TO ANYONE NOR FORGET IT."
+    )
+
+    parser.add_argument('--password',
+                        dest = 'password',
+                        help = "Optionally encrypts phrase. Allows phrase to be stored in less secure places but not as safe as remembering the full phrase. If you trust the person/place to hold the encrypted phrase a simple password may suffice. Think carefully."
+    )
+
+    parser.add_argument('--count',
+                        type = int,
+                        dest = 'count',
+                        help = "Number of offline/online addresses to generate. (They are the same anyway but it does help to seperate them out)."
+    )
+
+
+
+
+    args = parser.parse_args()
+
+    ## password is not yer supported
+    wallet = Wallet(
+        phrase = args.phrase.strip(),
+        count  = args.count
+        )
+
+    wallet.print_report()
+
+
+####
+
+template = """
+########################################################################
+
+wallet.py - Deterministic Bitcoin Address Generator
+https://github.com/pavlos-christoforou/bitcoin
+
+########################################################################
+
+
+Your chosen phrase is given below:
+
+========================================================================
+
+{phrase}
+
+========================================================================
+
+Make sure no one has access to this phrase. All offline and online
+addresses generated here can be recovered by having access to this
+phrase. Store it in a very secure place or just memorize it. If your
+bitcoin addresses generated using this tool are for whatever reason
+lost they can be regenerated by rerunning this tool with your chosen
+phrase.
+
+
+Addresses and Keys
+------------------
+
+{addresses}
+
+
+Keep private addresses private. In general it is a good idea to keep
+offline addresses offline (ie not imported in a client connected to
+the internet and perhaps completely out of access. You may even delete
+them completely since they can be regenrated usign this module and the
+secret phrase. A Raspberry Pi in a locked place may be a good offline
+option.
+"""
+
+    
 
 
 ####
@@ -870,11 +1020,13 @@ def test2():
         assert _w1.public_point != _w2.public_point
 
 
-
-
 def test():
     test1()
     test2()
 
 
-test()
+
+
+
+if __name__ == '__main__':
+    cli()
