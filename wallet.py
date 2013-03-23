@@ -920,6 +920,7 @@ def cli():
     parser.add_argument('--count',
                         type = int,
                         dest = 'count',
+                        default = 5,
                         help = "Number of offline/online addresses to generate. (They are the same anyway but it does help to seperate them out)."
     )
 
